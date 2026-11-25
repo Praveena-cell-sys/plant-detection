@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LeafLens: plant leaf disease check</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<main class="wrap">
+  <header class="intro">
+    <p class="brand">LeafLens</p>
+    <h1>Is your plant leaf healthy?</h1>
+    <p class="lede">Upload a clear photo of one leaf. You'll get the most likely disease, how sure the model is, and what to do next.</p>
+  </header>
+
+  <div class="grid">
+    <section class="card" aria-label="Upload">
+      <div id="drop" class="drop" tabindex="0" role="button" aria-label="Upload a leaf photo">
+        <div id="stage" class="stage" hidden>
+          <img id="preview" alt="Your uploaded leaf">
+          <div class="scan" aria-hidden="true"></div>
+        </div>
+        <div id="prompt">
+          <p class="drop-title">Drop a leaf photo here</p>
+          <p class="muted">or pick one from your device</p>
+          <span class="btn">Choose photo</span>
+        </div>
+        <input id="file" type="file" accept="image/png,image/jpeg,image/webp" hidden>
+      </div>
+      <p class="muted small">JPG, PNG or WebP, up to 8 MB. Works best with a single leaf filling the frame in daylight.</p>
+      <button id="again" class="btn ghost" hidden>Try another photo</button>
+    </section>
+
+    <section class="card" aria-live="polite" aria-label="Result">
+      <div id="empty">
+        <h2>Your result appears here</h2>
+        <p class="muted">Trained on the PlantVillage dataset for apple, blueberry, cherry, corn, grape, orange, peach, pepper, potato, raspberry, soybean, squash, strawberry and tomato leaves.</p>
+      </div>
+      <div id="loading" hidden><div class="spinner"></div><p>Analyzing your leaf...</p></div>
+      <div id="error" class="error" role="alert" hidden></div>
+      <div id="result" hidden>
+        <span id="chip" class="chip"></span>
+        <h2 id="name"></h2>
+        <div class="meter-row"><span>Confidence</span><strong id="conf"></strong></div>
+        <div class="meter"><div id="bar"></div></div>
+        <p id="warn" class="warn" hidden>The model is unsure. Retake the photo in better light or check with a local expert.</p>
+        <p id="desc"></p>
+        <h3>What to do</h3>
+        <ol id="steps"></ol>
+        <p id="alts" class="muted small"></p>
+      </div>
+    </section>
+  </div>
+  <p class="muted small foot">A guide, not a diagnosis. Confirm serious problems with a local agricultural extension service.</p>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+const drop = $('#drop'), input = $('#file');
+const views = ['empty', 'loading', 'error', 'result'];
+const show = id => views.forEach(v => $('#' + v).hidden = v !== id);
+
+drop.addEventListener('click', () => { if (!$('#stage').hidden) return; input.click(); });
+drop.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); input.click(); } });
+['dragenter', 'dragover'].forEach(t => drop.addEventListener(t, e => { e.preventDefault(); drop.classList.add('over'); }));
+['dragleave', 'drop'].forEach(t => drop.addEventListener(t, e => { e.preventDefault(); drop.classList.remove('over'); }));
+drop.addEventListener('drop', e => handle(e.dataTransfer.files[0]));
+input.addEventListener('change', () => handle(input.files[0]));
+$('#again').addEventListener('click', reset);
+
+function reset() {
+  input.value = ''; $('#stage').hidden = true; $('#prompt').hidden = false;
+  $('#again').hidden = true; drop.classList.remove('busy'); show('empty');
+}
+
+function fail(msg) { $('#error').textContent = msg; show('error'); drop.classList.remove('busy'); }
+
+async function handle(file) {
+  if (!file) return;
+  if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) return fail('Unsupported file type. Use JPG, PNG or WebP.');
+  if (file.size > 8 * 1024 * 1024) return fail('Image is larger than 8 MB. Choose a smaller photo.');
+
+  $('#preview').src = URL.createObjectURL(file);
+  $('#stage').hidden = false; $('#prompt').hidden = true; $('#again').hidden = false;
+  drop.classList.add('busy'); show('loading');
+
+  const form = new FormData();
+  form.append('image', file);
+  try {
+    const res = await fetch('/predict', { method: 'POST', body: form });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return fail(data.error || 'Something went wrong. Please try again.');
+    render(data);
+  } catch (err) {
+    fail('Could not reach the server. Check that Flask is running.');
+  }
+}
+
+function render(d) {
+  drop.classList.remove('busy');
+  const chip = $('#chip');
+  chip.textContent = d.is_healthy ? 'Healthy' : 'Disease detected';
+  chip.className = 'chip ' + (d.is_healthy ? 'ok' : 'bad');
+  $('#name').textContent = d.disease_name;
+  $('#conf').textContent = d.confidence.toFixed(1) + '%';
+  $('#bar').style.width = '0%';
+  requestAnimationFrame(() => $('#bar').style.width = d.confidence + '%');
+  $('#warn').hidden = !d.low_confidence;
+  $('#desc').textContent = d.description;
+  $('#steps').replaceChildren(...d.prevention_steps.map(s => Object.assign(document.createElement('li'), { textContent: s })));
+  $('#alts').textContent = d.alternatives.length
+    ? 'Other possibilities: ' + d.alternatives.map(a => `${a.name} (${a.confidence.toFixed(1)}%)`).join(', ') : '';
+  show('result');
+}
+</script>
+</body>
+</html>
